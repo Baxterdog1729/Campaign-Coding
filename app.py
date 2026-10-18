@@ -661,6 +661,19 @@ with tab2:
     with discipline_col:
         s2_discipline = st.selectbox("Faculty Discipline *", ["STEM", "Creative", "Humanities", "Social Science"], key="step2_discipline")
 
+    part_a_key = f"step2:{s2_id.strip() or 'new-interview'}:part-a"
+    st.markdown("#### Part A: Confirming Stages")
+    q_a2 = st.text_area(
+        "A2. Is there anything about these stages or definitions that is unclear?",
+        height=60,
+        key=f"{part_a_key}:a2"
+    )
+    q_a3 = st.text_area(
+        "A3. Is there any stage you think of differently from how it is defined here?",
+        height=60,
+        key=f"{part_a_key}:a3"
+    )
+
     stage_options = st.session_state.final_stages or ["Topic Selection / Ideation"]
     stage_state_key = f"step2:{s2_id.strip() or 'new-interview'}"
     walk_state = st.session_state.stage_walkthrough_ui.setdefault(
@@ -713,10 +726,6 @@ with tab2:
     with st.form("step2_full_form", clear_on_submit=True):
         stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
         hardest_stage = st.selectbox("Stage with Greatest Struggle (C1) *", stages_list)
-
-        st.markdown("#### Part A: Confirming Stages")
-        q_a2 = st.text_area("A2. Is there anything about these stages or definitions that is unclear?", height=60)
-        q_a3 = st.text_area("A3. Is there any stage you think of differently from how it is defined here?", height=60)
 
         st.markdown("#### Part C: Stage with Greatest Struggle (C1 – C5)")
         q_c2 = st.text_area(f"C2. Why do you think students struggle the most at {hardest_stage}?", height=70)
