@@ -68,12 +68,31 @@ st.markdown("""
         padding: 20px;
         margin-bottom: 15px;
     }
-    .quad-card {
+    .st-key-strategy-support,
+    .st-key-strategy-lead,
+    .st-key-strategy-drop,
+    .st-key-strategy-niche {
+        min-height: 300px;
+        overflow-wrap: anywhere;
         padding: 16px;
-        border-radius: 12px;
+        border-radius: 8px;
         margin-bottom: 12px;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(167, 139, 250, 0.2);
+    }
+    .st-key-strategy-support {
+        background: rgba(245, 158, 11, 0.12);
+        border-color: #f59e0b;
+    }
+    .st-key-strategy-lead {
+        background: rgba(16, 185, 129, 0.14);
+        border-color: #10b981;
+    }
+    .st-key-strategy-drop {
+        background: rgba(51, 65, 85, 0.2);
+        border-color: #64748b;
+    }
+    .st-key-strategy-niche {
+        background: rgba(99, 102, 241, 0.12);
+        border-color: #6366f1;
     }
     .stButton>button {
         background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
@@ -1235,11 +1254,12 @@ with tab7:
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     df_annot = pd.DataFrame(st.session_state.coder_a_annotations) if st.session_state.coder_a_annotations else pd.DataFrame()
     df_surv = pd.DataFrame(st.session_state.surveys) if st.session_state.surveys else pd.DataFrame()
+    coded_code_ids = set(df_annot["code_id"].dropna().astype(str)) if not df_annot.empty else set()
 
     total_students = df_annot[df_annot["group"].str.contains("Student", na=False)]["interview_id"].nunique() if not df_annot.empty else 1
     matrix_data = []
 
-    for c in st.session_state.codebook:
+    for c in (code for code in st.session_state.codebook if code["id"] in coded_code_ids):
         cid = c["id"]
         
         if not df_annot.empty:
@@ -1290,32 +1310,37 @@ with tab7:
         else:
             q_drop.append(item)
 
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("<div class='quad-card' style='background: rgba(245, 158, 11, 0.15); border-color: #f59e0b;'><b>SUPPORTING MESSAGE</b><br><small>Low Frequency / High Pain Rate</small></div>", unsafe_allow_html=True)
-        for x in q_supp: st.write(f"• **{x['code']['id']}** ({x['code']['name']})")
-        
-    with g2:
-        st.markdown("<div class='quad-card' style='background: rgba(16, 185, 129, 0.2); border-color: #10b981;'><b>⭐ LEAD MESSAGE</b><br><small>High Frequency / High Pain / Triangulated</small></div>", unsafe_allow_html=True)
-        for x in q_lead: 
-            sig_badge = "🛡️ Sig" if x["significant"] else ""
-            st.write(f"• **{x['code']['id']}** ({x['code']['name']}) {sig_badge}")
+    if not matrix_data:
+        st.info("No codes to display yet. Apply at least one code in Interface 4 first.")
+    else:
+        def render_strategy_quadrant(key, title, description, entries):
+            with st.container(border=True, key=key):
+                st.markdown(f"**{title}**")
+                st.caption(description)
+                if not entries:
+                    st.caption("No coded codes in this quadrant.")
+                for entry in entries:
+                    significance = " · Significant" if entry.get("significant") else ""
+                    st.markdown(f"- **{entry['code']['id']}** ({entry['code']['name']}){significance}")
 
-    g3, g4 = st.columns(2)
-    with g3:
-        st.markdown("<div class='quad-card' style='background: rgba(51, 65, 85, 0.3); border-color: #64748b;'><b>DROP FOR NOW</b><br><small>Low Frequency / Low Pain Rate</small></div>", unsafe_allow_html=True)
-        for x in q_drop: st.write(f"• **{x['code']['id']}** ({x['code']['name']})")
-        
-    with g4:
-        st.markdown("<div class='quad-card' style='background: rgba(99, 102, 241, 0.15); border-color: #6366f1;'><b>NICHE / BROAD CONCERN</b><br><small>High Frequency / Low Pain Rate</small></div>", unsafe_allow_html=True)
-        for x in q_niche: st.write(f"• **{x['code']['id']}** ({x['code']['name']})")
+        left_column, right_column = st.columns(2)
+        with left_column:
+            render_strategy_quadrant("strategy-support", "SUPPORTING MESSAGE", "Low Frequency / High Pain Rate", q_supp)
+        with right_column:
+            render_strategy_quadrant("strategy-lead", "LEAD MESSAGE", "High Frequency / High Pain / Triangulated", q_lead)
 
-    st.markdown("---")
-    st.subheader("Automated Campaign Messaging Strategy Output")
-    selected_matrix_code = st.selectbox("Select Code for Campaign Strategy Brief:", [x["code"]["id"] for x in matrix_data])
-    target_item = next(x for x in matrix_data if x["code"]["id"] == selected_matrix_code)
-    
-    st.info(f"**Target Code:** {target_item['code']['id']} - {target_item['code']['name']}")
-    st.write(f"**Primary Campaign Headline:** Stop Drowning in {target_item['code']['name']} — Build Your Thesis Plan Fast with Thought Sweep.")
-    st.write(f"**Recommended Channel:** Barrett Honors College Weekly Digest & Academic Advisor Referrals")
+        left_column, right_column = st.columns(2)
+        with left_column:
+            render_strategy_quadrant("strategy-drop", "DROP FOR NOW", "Low Frequency / Low Pain Rate", q_drop)
+        with right_column:
+            render_strategy_quadrant("strategy-niche", "NICHE / BROAD CONCERN", "High Frequency / Low Pain Rate", q_niche)
+
+        st.markdown("---")
+        st.subheader("Automated Campaign Messaging Strategy Output")
+        selected_matrix_code = st.selectbox("Select Code for Campaign Strategy Brief:", [x["code"]["id"] for x in matrix_data])
+        target_item = next(x for x in matrix_data if x["code"]["id"] == selected_matrix_code)
+        
+        st.info(f"**Target Code:** {target_item['code']['id']} - {target_item['code']['name']}")
+        st.write(f"**Primary Campaign Headline:** Stop Drowning in {target_item['code']['name']} — Build Your Thesis Plan Fast with Thought Sweep.")
+        st.write(f"**Recommended Channel:** Barrett Honors College Weekly Digest & Academic Advisor Referrals")
     st.markdown("</div>", unsafe_allow_html=True)
