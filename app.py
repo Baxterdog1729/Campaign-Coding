@@ -723,11 +723,15 @@ with tab2:
         if walk_state["pending"]:
             ask_document_more_stages(stage_state_key)
 
-    with st.form("step2_full_form", clear_on_submit=True):
-        stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
-        hardest_stage = st.selectbox("Stage with Greatest Struggle (C1) *", stages_list)
+    stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
+    hardest_stage = st.selectbox(
+        "Stage with Greatest Struggle (C1) *",
+        stages_list,
+        key="step2_hardest_stage"
+    )
 
-        st.markdown("#### Part C: Stage with Greatest Struggle (C1 – C5)")
+    with st.form("step2_full_form", clear_on_submit=True):
+        st.markdown(f"#### Part C: {hardest_stage} (C1 – C5)")
         q_c2 = st.text_area(f"C2. Why do you think students struggle the most at {hardest_stage}?", height=70)
         q_c3 = st.text_area("C3. What does that struggle look like when it is happening?", height=70)
         q_c4 = st.text_area("C4. Can you walk me through a specific example, without naming the student?", height=70)
