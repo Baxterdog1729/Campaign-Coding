@@ -4,6 +4,10 @@ import numpy as np
 from scipy import stats
 import json
 import math
+import re
+from io import BytesIO
+from pathlib import Path
+from xml.sax.saxutils import escape
 
 # ==============================================================================
 # 1. PAGE CONFIGURATION & MODERN DARK GLASSMORPHISM STYLING
@@ -392,6 +396,80 @@ def build_transcript_questions(interview, source):
                     "answer": answer
                 })
     return questions
+
+def create_transcript_pdf(step_name, interview_id, questions):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    font_path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    if font_path.exists() and "ThoughtSweepSans" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("ThoughtSweepSans", str(font_path)))
+        font_name = "ThoughtSweepSans"
+    else:
+        font_name = "Helvetica"
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="TranscriptTitle",
+        parent=styles["Title"],
+        fontName=font_name,
+        fontSize=18,
+        leading=23,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor("#16324F"),
+        spaceAfter=12
+    ))
+    styles.add(ParagraphStyle(
+        name="TranscriptQuestion",
+        parent=styles["Heading3"],
+        fontName=font_name,
+        fontSize=11,
+        leading=15,
+        textColor=colors.HexColor("#16324F"),
+        spaceBefore=12,
+        spaceAfter=5
+    ))
+    styles.add(ParagraphStyle(
+        name="TranscriptBody",
+        parent=styles["BodyText"],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        spaceAfter=8
+    ))
+    styles.add(ParagraphStyle(
+        name="TranscriptStage",
+        parent=styles["Heading2"],
+        fontName=font_name,
+        fontSize=13,
+        leading=17,
+        textColor=colors.HexColor("#237A72"),
+        spaceBefore=12,
+        spaceAfter=7
+    ))
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=letter, title=f"{step_name} Transcript {interview_id}")
+    content = [
+        Paragraph(escape(f"{step_name} Transcript"), styles["TranscriptTitle"]),
+        Paragraph(escape(f"Interview ID: {interview_id}"), styles["TranscriptBody"]),
+        Spacer(1, 8)
+    ]
+    last_stage = None
+    for item in questions:
+        stage = item["stage"] or "General Responses"
+        if stage != last_stage:
+            content.append(Paragraph(escape(stage), styles["TranscriptStage"]))
+            last_stage = stage
+        content.append(Paragraph(escape(item["question"]), styles["TranscriptQuestion"]))
+        content.append(Paragraph(escape(item["answer"]).replace("\n", "<br/>"), styles["TranscriptBody"]))
+    document.build(content)
+    return buffer.getvalue()
 
 @st.dialog("Stage saved to transcript")
 def ask_document_more_stages(state_key):
@@ -830,13 +908,12 @@ with tab4:
     with sub_annot:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         all_transcripts = (
-            [{"source": "Step 1", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 1")} for x in st.session_state.step1_interviews] +
             [{"source": "Step 2", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 2")} for x in st.session_state.step2_interviews] +
             [{"source": "Step 3", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 3")} for x in st.session_state.step3_interviews]
         )
 
         if not all_transcripts:
-            st.warning("No interview transcripts logged yet. Enter interviews in Interfaces 1–3 first.")
+            st.warning("No Step 2 or Step 3 transcripts are available for coding yet.")
         else:
             transcript_options = [
                 f"{item['source']} | {item['id']} | {index + 1}"
@@ -959,47 +1036,95 @@ with tab4:
 # ------------------------------------------------------------------------------
 with tab5:
     st.markdown("### Interface 5: Qualitative Frequencies & Subtag Filters")
-    
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    if not st.session_state.coder_a_annotations:
-        st.info("No qualitative coding annotations recorded yet.")
-    else:
-        df_annot = pd.DataFrame(st.session_state.coder_a_annotations)
-        df_unique = df_annot.drop_duplicates(subset=["interview_id", "code_id"])
 
-        st.subheader("Top 5 Codes Overall (Unique Participant Counts)")
-        top_overall = df_unique["code_id"].value_counts().head(5)
-        st.bar_chart(top_overall)
-
-        st.markdown("---")
-        st.subheader("Subtag Filter Breakdown")
-        filter_type = st.radio("Drill Down By:", ["Discipline", "Group (Faculty vs Student)", "Individual Interview ID"], horizontal=True)
-        
-        if filter_type == "Discipline":
-            all_disciplines = ["STEM", "Creative", "Humanities", "Social Science"]
-            disc = st.selectbox("Select Discipline:", all_disciplines)
-            filtered = df_unique[df_unique["discipline"] == disc]
-            if filtered.empty:
-                st.caption(f"No qualitative tags recorded yet under '{disc}'.")
-            else:
-                st.table(filtered["code_id"].value_counts().head(5))
-        elif filter_type == "Group (Faculty vs Student)":
-            all_groups = ["Faculty", "Student-In-process", "Student-Completed", "Student-Beginning"]
-            grp = st.selectbox("Select Group:", all_groups)
-            filtered = df_unique[df_unique["group"] == grp]
-            if filtered.empty:
-                st.caption(f"No qualitative tags recorded yet under '{grp}'.")
-            else:
-                st.table(filtered["code_id"].value_counts().head(5))
+    frequency_tab, uncoded_tab = st.tabs(["Qualitative Frequencies", "Transcripts (Uncoded)"])
+    with frequency_tab:
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        if not st.session_state.coder_a_annotations:
+            st.info("No qualitative coding annotations recorded yet.")
         else:
-            all_uids = df_unique["interview_id"].unique() if not df_unique.empty else ["S1-01"]
-            iid = st.selectbox("Select Interview ID:", all_uids)
-            filtered = df_unique[df_unique["interview_id"] == iid]
-            if filtered.empty:
-                st.caption(f"No qualitative tags recorded for Interview ID '{iid}'.")
+            df_annot = pd.DataFrame(st.session_state.coder_a_annotations)
+            df_unique = df_annot.drop_duplicates(subset=["interview_id", "code_id"])
+
+            st.subheader("Top 5 Codes Overall (Unique Participant Counts)")
+            top_overall = df_unique["code_id"].value_counts().head(5)
+            st.bar_chart(top_overall)
+
+            st.markdown("---")
+            st.subheader("Subtag Filter Breakdown")
+            filter_type = st.radio("Drill Down By:", ["Discipline", "Group (Faculty vs Student)", "Individual Interview ID"], horizontal=True)
+            
+            if filter_type == "Discipline":
+                all_disciplines = ["STEM", "Creative", "Humanities", "Social Science"]
+                disc = st.selectbox("Select Discipline:", all_disciplines)
+                filtered = df_unique[df_unique["discipline"] == disc]
+                if filtered.empty:
+                    st.caption(f"No qualitative tags recorded yet under '{disc}'.")
+                else:
+                    st.table(filtered["code_id"].value_counts().head(5))
+            elif filter_type == "Group (Faculty vs Student)":
+                all_groups = ["Faculty", "Student-In-process", "Student-Completed", "Student-Beginning"]
+                grp = st.selectbox("Select Group:", all_groups)
+                filtered = df_unique[df_unique["group"] == grp]
+                if filtered.empty:
+                    st.caption(f"No qualitative tags recorded yet under '{grp}'.")
+                else:
+                    st.table(filtered["code_id"].value_counts().head(5))
             else:
-                st.table(filtered["code_id"].value_counts().head(5))
-    st.markdown("</div>", unsafe_allow_html=True)
+                all_uids = df_unique["interview_id"].unique() if not df_unique.empty else ["S1-01"]
+                iid = st.selectbox("Select Interview ID:", all_uids)
+                filtered = df_unique[df_unique["interview_id"] == iid]
+                if filtered.empty:
+                    st.caption(f"No qualitative tags recorded for Interview ID '{iid}'.")
+                else:
+                    st.table(filtered["code_id"].value_counts().head(5))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with uncoded_tab:
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.subheader("Transcripts (Uncoded)")
+        st.caption("Full interview transcripts grouped by interview step. Each document can be downloaded as a PDF.")
+
+        transcripts_by_step = [
+            ("Step 1", st.session_state.step1_interviews),
+            ("Step 2", st.session_state.step2_interviews),
+            ("Step 3", st.session_state.step3_interviews)
+        ]
+        if not any(interviews for _, interviews in transcripts_by_step):
+            st.info("No interview transcripts have been recorded yet.")
+        else:
+            for step_name, interviews in transcripts_by_step:
+                st.markdown(f"#### {step_name}")
+                if not interviews:
+                    st.caption("No transcripts for this step yet.")
+                    continue
+                for interview_index, interview in enumerate(interviews):
+                    interview_id = str(interview.get("id", "Unknown"))
+                    questions = build_transcript_questions(interview, step_name)
+                    with st.expander(f"Interview ID: {interview_id}", expanded=False):
+                        st.caption(f"{step_name} | Interview ID: {interview_id}")
+                        with st.container(border=True):
+                            if not questions:
+                                st.info("This interview has no recorded answers yet.")
+                            else:
+                                current_stage = None
+                                for question in questions:
+                                    stage_name = question["stage"] or "General Responses"
+                                    if stage_name != current_stage:
+                                        st.markdown(f"### {stage_name}")
+                                        current_stage = stage_name
+                                    st.markdown(f"**{question['question']}**")
+                                    st.write(question["answer"])
+
+                        safe_interview_id = re.sub(r"[^A-Za-z0-9._-]+", "_", interview_id).strip("._") or "interview"
+                        st.download_button(
+                            "Download PDF",
+                            data=create_transcript_pdf(step_name, interview_id, questions),
+                            file_name=f"{step_name.lower().replace(' ', '_')}_{safe_interview_id}.pdf",
+                            mime="application/pdf",
+                            key=f"uncoded_transcript_pdf_{step_name}_{interview_index}"
+                        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
 # INTERFACE 6: QUANTITATIVE SURVEY STATS
