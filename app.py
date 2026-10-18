@@ -174,11 +174,20 @@ def get_full_codebook_v03():
     ]
 
 def init_session_state():
+    default_stages = [
+        "Topic Selection / Ideation", "Proposal & Scoping", "Literature Review",
+        "Data Collection / Execution", "Analysis & Synthesis", "Drafting & Writing"
+    ]
+    if "final_stages" not in st.session_state and st.session_state.get("stage_definitions"):
+        st.session_state["final_stages"] = list(st.session_state["stage_definitions"])
+
     defaults = {
         "step1_interviews": [],
         "step2_interviews": [],
         "step3_interviews": [],
         "stage_definitions": {},
+        "final_stages": default_stages,
+        "edit_final_stages": False,
         "codebook": get_full_codebook_v03(),
         "coder_a_annotations": [],
         "coder_b_annotations": [],
@@ -195,6 +204,7 @@ init_session_state()
 def export_all_data():
     data = {
         "stage_definitions": st.session_state.stage_definitions,
+        "final_stages": st.session_state.final_stages,
         "step1_interviews": st.session_state.step1_interviews,
         "step2_interviews": st.session_state.step2_interviews,
         "step3_interviews": st.session_state.step3_interviews,
@@ -212,6 +222,10 @@ def import_all_data(uploaded_json):
         data = json.load(uploaded_json)
         for key, value in data.items():
             st.session_state[key] = value
+        if "final_stages" not in data and data.get("stage_definitions"):
+            st.session_state.final_stages = list(data["stage_definitions"])
+        for stage_number in range(1, 7):
+            st.session_state.pop(f"final_stage_edit_{stage_number}", None)
         return True
     except Exception as e:
         st.error(f"Failed to parse JSON file: {e}")
@@ -328,20 +342,47 @@ with tab1:
 
     with col2:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-        st.subheader("Standardize Concrete Process Stages")
-        st.info("Set standardized stage names and definitions here. These propagate across Interfaces 2–7.")
-        
-        stages = ["Topic Selection / Ideation", "Proposal & Scoping", "Literature Review", 
-                  "Data Collection / Execution", "Analysis & Synthesis", "Drafting & Writing"]
-        
-        updated_defs = {}
-        for stage in stages:
-            curr = st.session_state.stage_definitions.get(stage, "")
-            updated_defs[stage] = st.text_input(f"Stage: {stage}", value=curr, placeholder=f"Define {stage} rules...")
-        
-        if st.button("Lock Standardized Stage Definitions", use_container_width=True):
-            st.session_state.stage_definitions = updated_defs
-            st.toast("✅ Stage definitions locked across software!", icon="🔒")
+        st.subheader("Finalize Thesis Stage Names")
+        st.caption("Saved stage names fill the stage choices used throughout the interview guides.")
+
+        if st.session_state.edit_final_stages:
+            with st.form("final_stage_names_form"):
+                proposed_stages = [
+                    st.text_input(
+                        f"Final Stage {stage_number}",
+                        value=stage_name,
+                        key=f"final_stage_edit_{stage_number}"
+                    )
+                    for stage_number, stage_name in enumerate(st.session_state.final_stages, 1)
+                ]
+                save_stages = st.form_submit_button("Save Final Stage Names", use_container_width=True)
+
+            if save_stages:
+                cleaned_stages = [stage.strip() for stage in proposed_stages]
+                if any(not stage for stage in cleaned_stages):
+                    st.error("Enter a name for each final stage before saving.")
+                elif len(set(cleaned_stages)) != len(cleaned_stages):
+                    st.error("Each final stage name must be unique.")
+                else:
+                    previous_definitions = st.session_state.stage_definitions
+                    st.session_state.stage_definitions = {
+                        stage: previous_definitions.get(stage, "") for stage in cleaned_stages
+                    }
+                    st.session_state.final_stages = cleaned_stages
+                    st.session_state.edit_final_stages = False
+                    st.toast("✅ Final stage names saved across the interview guides!", icon="🔒")
+                    st.rerun()
+        else:
+            for stage_number, stage_name in enumerate(st.session_state.final_stages, 1):
+                st.text_input(
+                    f"Final Stage {stage_number}",
+                    value=stage_name,
+                    disabled=True,
+                    key=f"final_stage_display_{stage_number}"
+                )
+            if st.button("Edit Final Stage Names", use_container_width=True):
+                st.session_state.edit_final_stages = True
+                st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
@@ -358,7 +399,7 @@ with tab2:
             s2_id = st.text_input("Faculty Interviewee ID *", placeholder="e.g. F-01")
             disc = st.selectbox("Faculty Discipline *", ["STEM", "Creative", "Humanities", "Social Science"])
         with col2:
-            stages_list = list(st.session_state.stage_definitions.keys()) if st.session_state.stage_definitions else ["Topic Selection / Ideation"]
+            stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
             hardest_stage = st.selectbox("Stage with Greatest Struggle (C1) *", stages_list)
         
         st.markdown("---")
@@ -368,18 +409,18 @@ with tab2:
 
         st.markdown("---")
         st.markdown("#### Part B: Observed Struggles in Each Stage (B1 – B8)")
-        q_b1 = st.text_area("B1. What struggles do you observe at [Stage.Final]?", height=70)
+        q_b1 = st.text_area(f"B1. What struggles do you observe at {hardest_stage}?", height=70)
         q_b2 = st.text_area("B2. What does that look like in practice? What do you see students doing/not doing?", height=70)
         q_b3 = st.text_area("B3. Can you describe a recent example, without naming the student?", height=70)
         q_b4 = st.text_area("B4. What do you see students do when this happens?", height=70)
         q_b5 = st.text_area("B5. What do you think is going on when students struggle in this way?", height=70)
         q_b6 = st.text_area("B6. How common is this among the students you have advised?", height=70)
-        q_b7 = st.text_area("B7. What have you seen students do that helps them through [Stage.Final]?", height=70)
-        q_b8 = st.text_area("B8. Does what you see at [Stage.Final] change with project type/discipline?", height=70)
+        q_b7 = st.text_area(f"B7. What have you seen students do that helps them through {hardest_stage}?", height=70)
+        q_b8 = st.text_area(f"B8. Does what you see at {hardest_stage} change with project type/discipline?", height=70)
 
         st.markdown("---")
         st.markdown("#### Part C: Stage with Greatest Struggle (C1 – C5)")
-        q_c2 = st.text_area("C2. Why do you think students struggle the most at [Stage.Final]?", height=70)
+        q_c2 = st.text_area(f"C2. Why do you think students struggle the most at {hardest_stage}?", height=70)
         q_c3 = st.text_area("C3. What does that struggle look like when it is happening?", height=70)
         q_c4 = st.text_area("C4. Can you walk me through a specific example, without naming the student?", height=70)
         q_c5 = st.text_area("C5. What do you notice about students who get through with less struggle?", height=70)
@@ -421,7 +462,7 @@ with tab3:
         with col3:
             disc = st.selectbox("Discipline *", ["STEM", "Creative", "Humanities", "Social Science"])
 
-        stages_list = list(st.session_state.stage_definitions.keys()) if st.session_state.stage_definitions else ["Topic Selection / Ideation"]
+        stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
         hardest_stage = st.selectbox("Hardest Stage (H2)", stages_list)
         
         st.markdown("---")
@@ -433,13 +474,13 @@ with tab3:
 
         st.markdown("---")
         st.markdown("#### Stage by Stage Experience (B1 – B7)")
-        q_b1 = st.text_area("B1. Walk me through what you did during [Stage.Final], starting with the first thing.", height=70)
-        q_b2 = st.text_area("B2. Think of a moment during [Stage.Final] when something didn't go as expected. What happened?", height=70)
+        q_b1 = st.text_area(f"B1. Walk me through what you did during {hardest_stage}, starting with the first thing.", height=70)
+        q_b2 = st.text_area(f"B2. Think of a moment during {hardest_stage} when something didn't go as expected. What happened?", height=70)
         q_b3 = st.text_area("B3. What did you do when that happened?", height=70)
         q_b4 = st.text_area("B4. What do you think was going on at that point?", height=70)
-        q_b5 = st.text_area("B5. What part of [Stage.Final] went more smoothly than expected? What helped?", height=70)
-        q_b6 = st.text_area("B6 (Optional). Was anyone else involved in [Stage.Final]? What did they do?", height=60)
-        q_b7 = st.text_area("B7 (Optional). If doing [Stage.Final] again, what would you do differently?", height=60)
+        q_b5 = st.text_area(f"B5. What part of {hardest_stage} went more smoothly than expected? What helped?", height=70)
+        q_b6 = st.text_area(f"B6 (Optional). Was anyone else involved in {hardest_stage}? What did they do?", height=60)
+        q_b7 = st.text_area(f"B7 (Optional). If doing {hardest_stage} again, what would you do differently?", height=60)
 
         st.markdown("---")
         st.markdown("#### Your Ideas (11 – 110)")
