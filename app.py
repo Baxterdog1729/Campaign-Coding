@@ -4,6 +4,7 @@ import numpy as np
 from scipy import stats
 import json
 import math
+import random
 import re
 from io import BytesIO
 from pathlib import Path
@@ -196,6 +197,230 @@ def get_full_codebook_v03():
         {"id": "E5", "name": "Life circumstances", "category": "External Codes (E)", "desc": "Work, health, finances or family demands outside school crowding out thesis time.", "how_to_apply": "Do NOT code if time pressure came from coursework or thesis scheduling (use C5)."}
     ]
 
+PARTICIPANT_EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+def empty_participant_pool(target):
+    return {
+        "people": [],
+        "candidates": [],
+        "participants": [],
+        "declined_emails": [],
+        "source_file_name": "",
+        "target": target
+    }
+
+def empty_participant_sourcing():
+    return {
+        "student": empty_participant_pool(12),
+        "faculty": empty_participant_pool(5),
+        "completed": empty_participant_pool(6)
+    }
+
+def normalize_column_name(value):
+    return re.sub(r"[^a-z]", "", str(value).lower())
+
+def person_from_values(email, first_name="", last_name="", full_name=""):
+    email_match = PARTICIPANT_EMAIL_PATTERN.search(str(email))
+    if not email_match:
+        return None
+
+    first_name = "" if first_name is None else str(first_name).strip()
+    last_name = "" if last_name is None else str(last_name).strip()
+    if not first_name or not last_name:
+        clean_name = re.sub(r"(?i)\b(name|participant|student|faculty)\s*:\s*", "", str(full_name))
+        clean_name = PARTICIPANT_EMAIL_PATTERN.sub("", clean_name)
+        clean_name = re.sub(r"(?i)\b(email|e-mail|contact)\s*:\s*", "", clean_name)
+        name_parts = re.findall(r"[^\W\d_][\w.'’-]*", clean_name, flags=re.UNICODE)
+        if len(name_parts) < 2:
+            return None
+        first_name = name_parts[0]
+        last_name = " ".join(name_parts[1:])
+
+    return {
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email_match.group(0).lower()
+    }
+
+def people_from_rows(rows):
+    if not rows:
+        return []
+
+    header_aliases = {
+        "email": {"email", "emailaddress", "primaryemail", "contactemail", "mail"},
+        "first_name": {"first", "firstname", "givenname", "forename"},
+        "last_name": {"last", "lastname", "surname", "familyname"},
+        "full_name": {"name", "fullname", "participantname", "studentname", "facultyname"}
+    }
+    first_row = [normalize_column_name(value) for value in rows[0]]
+    headers = {
+        key: next((index for index, value in enumerate(first_row) if value in aliases), None)
+        for key, aliases in header_aliases.items()
+    }
+    has_headers = any(index is not None for index in headers.values())
+    data_rows = rows[1:] if has_headers else rows
+    people = []
+
+    for row in data_rows:
+        values = [str(value).strip() for value in row]
+        email_values = []
+        email_column = headers["email"]
+        if email_column is not None and email_column < len(values):
+            email_values = PARTICIPANT_EMAIL_PATTERN.findall(values[email_column])
+        if not email_values:
+            email_values = PARTICIPANT_EMAIL_PATTERN.findall(" ".join(values))
+        if not email_values:
+            continue
+
+        def cell_for(key):
+            index = headers[key]
+            return values[index] if index is not None and index < len(values) else ""
+
+        first_name = cell_for("first_name")
+        last_name = cell_for("last_name")
+        full_name = cell_for("full_name")
+        if not full_name and not (first_name and last_name):
+            full_name = " ".join(
+                value for value in values
+                if value and not PARTICIPANT_EMAIL_PATTERN.search(value)
+            )
+        for email in email_values:
+            person = person_from_values(email, first_name, last_name, full_name)
+            if person:
+                people.append(person)
+
+    return people
+
+def people_from_text(text):
+    people = []
+    for line in text.splitlines():
+        emails = PARTICIPANT_EMAIL_PATTERN.findall(line)
+        if not emails:
+            continue
+        for email in emails:
+            person = person_from_values(email, full_name=line)
+            if person:
+                people.append(person)
+    return people
+
+def extract_people_from_upload(uploaded_file):
+    filename = uploaded_file.name
+    suffix = Path(filename).suffix.lower()
+    contents = uploaded_file.getvalue()
+
+    try:
+        if suffix == ".csv":
+            table = pd.read_csv(BytesIO(contents), header=None, dtype=str, keep_default_na=False)
+            people = people_from_rows(table.values.tolist())
+        elif suffix == ".xlsx":
+            table = pd.read_excel(BytesIO(contents), header=None, dtype=str, keep_default_na=False)
+            people = people_from_rows(table.values.tolist())
+        elif suffix == ".json":
+            data = json.loads(contents.decode("utf-8-sig"))
+            records = []
+
+            def collect_records(value):
+                if isinstance(value, dict):
+                    if any("email" in normalize_column_name(key) for key in value):
+                        records.append(value)
+                    for nested in value.values():
+                        if isinstance(nested, (dict, list)):
+                            collect_records(nested)
+                elif isinstance(value, list):
+                    for nested in value:
+                        collect_records(nested)
+
+            collect_records(data)
+            people = []
+            for record in records:
+                normalized = {normalize_column_name(key): value for key, value in record.items()}
+                email = next(
+                    (value for key, value in normalized.items() if key in {"email", "emailaddress", "primaryemail", "contactemail", "mail"}),
+                    ""
+                )
+                first_name = next(
+                    (value for key, value in normalized.items() if key in {"first", "firstname", "givenname", "forename"}),
+                    ""
+                )
+                last_name = next(
+                    (value for key, value in normalized.items() if key in {"last", "lastname", "surname", "familyname"}),
+                    ""
+                )
+                full_name = next(
+                    (value for key, value in normalized.items() if key in {"name", "fullname", "participantname", "studentname", "facultyname"}),
+                    ""
+                )
+                person = person_from_values(email, first_name, last_name, full_name)
+                if person:
+                    people.append(person)
+        elif suffix == ".txt":
+            people = people_from_text(contents.decode("utf-8-sig"))
+        elif suffix == ".pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(contents))
+            people = people_from_text("\n".join(page.extract_text() or "" for page in reader.pages))
+        elif suffix == ".docx":
+            from docx import Document
+
+            document = Document(BytesIO(contents))
+            text_lines = [paragraph.text for paragraph in document.paragraphs]
+            text_lines.extend(
+                " ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            )
+            people = people_from_text("\n".join(text_lines))
+        else:
+            raise ValueError("Use a CSV, XLSX, TXT, JSON, PDF, or DOCX file.")
+    except Exception as error:
+        raise ValueError(f"Could not read {filename}: {error}") from error
+
+    unique_people = []
+    seen_emails = set()
+    for person in people:
+        if person["email"] not in seen_emails:
+            seen_emails.add(person["email"])
+            unique_people.append(person)
+    if not unique_people:
+        raise ValueError(
+            "No records with a recognizable first name, last name, and email address were found."
+        )
+    return unique_people
+
+def load_participant_pool(group, people, filename):
+    pool = empty_participant_pool(st.session_state.participant_sourcing[group]["target"])
+    pool["people"] = people
+    pool["source_file_name"] = filename
+    random.SystemRandom().shuffle(pool["people"])
+    for slot, person in enumerate(pool["people"][:pool["target"]], start=1):
+        pool["candidates"].append({"slot": slot, **person})
+    st.session_state.participant_sourcing[group] = pool
+
+def respond_to_candidate(group, slot, participating):
+    pool = st.session_state.participant_sourcing[group]
+    candidate = next(item for item in pool["candidates"] if item["slot"] == slot)
+    pool["candidates"].remove(candidate)
+
+    if participating:
+        pool["participants"].append({
+            "number": slot,
+            "first_name": candidate["first_name"],
+            "last_name": candidate["last_name"],
+            "email": candidate["email"]
+        })
+        return
+
+    pool["declined_emails"].append(candidate["email"])
+    unavailable = set(pool["declined_emails"])
+    unavailable.update(person["email"] for person in pool["participants"])
+    unavailable.update(person["email"] for person in pool["candidates"])
+    replacements = [person for person in pool["people"] if person["email"] not in unavailable]
+    if replacements:
+        replacement = random.SystemRandom().choice(replacements)
+        pool["candidates"].append({"slot": slot, **replacement})
+        pool["candidates"].sort(key=lambda item: item["slot"])
+
 def init_session_state():
     default_stages = [
         "Topic Selection / Ideation", "Proposal & Scoping", "Literature Review",
@@ -217,7 +442,8 @@ def init_session_state():
         "coder_b_annotations": [],
         "kappa_locked": False,
         "kappa_value": 0.0,
-        "surveys": []
+        "surveys": [],
+        "participant_sourcing": empty_participant_sourcing()
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -237,7 +463,8 @@ def export_all_data():
         "coder_b_annotations": st.session_state.coder_b_annotations,
         "kappa_locked": st.session_state.kappa_locked,
         "kappa_value": st.session_state.kappa_value,
-        "surveys": st.session_state.surveys
+        "surveys": st.session_state.surveys,
+        "participant_sourcing": st.session_state.participant_sourcing
     }
     return json.dumps(data, indent=2)
 
@@ -504,6 +731,82 @@ def ask_document_more_stages(state_key):
             st.session_state.stage_walkthrough_ui[state_key]["finished"] = True
             st.rerun()
 
+def render_candidate_selection(group):
+    pool = st.session_state.participant_sourcing[group]
+    target = pool["target"]
+    st.markdown(f"#### Candidates ({len(pool['participants'])}/{target} participating)")
+
+    if not pool["people"]:
+        st.info("Upload a file to generate randomized candidates.")
+        return
+
+    st.caption(f"Source file: {pool['source_file_name']} · {len(pool['people'])} people identified")
+    for candidate in pool["candidates"]:
+        with st.container(border=True):
+            st.markdown(
+                f"**Participant {candidate['slot']}** · "
+                f"{candidate['first_name']} {candidate['last_name']} · {candidate['email']}"
+            )
+            participating_col, not_participating_col = st.columns(2)
+            with participating_col:
+                if st.button(
+                    "Participating",
+                    key=f"participant_yes_{group}_{candidate['slot']}",
+                    width="stretch"
+                ):
+                    respond_to_candidate(group, candidate["slot"], True)
+                    st.rerun()
+            with not_participating_col:
+                if st.button(
+                    "Not Participating.",
+                    key=f"participant_no_{group}_{candidate['slot']}",
+                    width="stretch"
+                ):
+                    respond_to_candidate(group, candidate["slot"], False)
+                    st.rerun()
+
+    if len(pool["participants"]) >= target:
+        st.success(f"Participant selection is complete: {target} participants accepted.")
+    elif not pool["candidates"]:
+        st.warning(
+            f"No eligible candidates remain. {len(pool['participants'])} of {target} "
+            "participants have accepted; load a new source list to continue."
+        )
+
+def render_participant_uploader(group, title):
+    file_upload = st.file_uploader(
+        f"Upload {title} file",
+        type=["csv", "xlsx", "txt", "json", "pdf", "docx"],
+        key=f"participant_upload_{group}"
+    )
+    if st.button(
+        f"Load {title} file",
+        key=f"participant_load_{group}",
+        disabled=file_upload is None
+    ):
+        try:
+            people = extract_people_from_upload(file_upload)
+            load_participant_pool(group, people, file_upload.name)
+            st.success(
+                f"Loaded {len(people)} people. Loading a new list replaces this category's "
+                "candidate and participant selections."
+            )
+        except ValueError as error:
+            st.error(str(error))
+
+def render_participant_table(group, label):
+    participants = st.session_state.participant_sourcing[group]["participants"]
+    if not participants:
+        st.info(f"No {label.lower()} have accepted yet.")
+        return
+    table = pd.DataFrame(participants).rename(columns={
+        "number": "Number",
+        "first_name": "First name",
+        "last_name": "Last name",
+        "email": "Email"
+    })
+    st.dataframe(table, hide_index=True, width="stretch")
+
 # ==============================================================================
 # HEADER & GLOBAL DATA CONTROL DRAWER
 # ==============================================================================
@@ -535,23 +838,72 @@ with col_ctrl:
             clear_all_data()
 
 # ==============================================================================
-# TOP TAB NAVIGATION (INTERFACES 1 - 7)
+# TOP TAB NAVIGATION (INTERFACES 1 - 8)
 # ==============================================================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "1. Thesis Stages",
-    "2. Faculty Obs.",
-    "3. Student Exp.",
-    "4. Transcript Coding",
-    "5. Subtag Drill-Down",
-    "6. Survey Stats",
-    "7. Strategy Matrix"
+source_tab, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "1. Participant sourcing",
+    "2. Thesis Stages",
+    "3. Faculty Obs.",
+    "4. Student Exp.",
+    "5. Transcript Coding",
+    "6. Subtag Drill-Down",
+    "7. Survey Stats",
+    "8. Strategy Matrix"
 ])
 
+with source_tab:
+    st.markdown("### Interface 1: Participant sourcing")
+    st.caption(
+        "Upload student and faculty contact lists, review randomly selected candidates, "
+        "and record participation decisions. Names and email addresses are processed in this app."
+    )
+    sourcing_tab, participants_tab, completed_sourcing_tab = st.tabs([
+        "Participant selection",
+        "Participants",
+        "Completed Participant selection"
+    ])
+
+    with sourcing_tab:
+        student_tab, faculty_tab = st.tabs(["Students", "Faculty"])
+        with student_tab:
+            st.subheader("Student candidates")
+            st.caption("The app selects up to 12 students at random and replaces declined candidates.")
+            render_participant_uploader("student", "student")
+            render_candidate_selection("student")
+
+        with faculty_tab:
+            st.subheader("Faculty candidates")
+            st.caption("The app selects up to 5 faculty members at random and replaces declined candidates.")
+            render_participant_uploader("faculty", "faculty")
+            render_candidate_selection("faculty")
+
+    with participants_tab:
+        students_tab, faculty_participants_tab, completed_participants_tab = st.tabs([
+            "Students",
+            "Faculty",
+            "Completed participants"
+        ])
+        with students_tab:
+            render_participant_table("student", "Student participants")
+        with faculty_participants_tab:
+            render_participant_table("faculty", "Faculty participants")
+        with completed_participants_tab:
+            render_participant_table("completed", "Completed participants")
+
+    with completed_sourcing_tab:
+        st.subheader("Completed Participant selection")
+        st.caption(
+            "Upload the completed-participant list. The app selects up to 6 candidates; "
+            "declined candidates are replaced and accepted participants are saved separately."
+        )
+        render_participant_uploader("completed", "completed participant")
+        render_candidate_selection("completed")
+
 # ------------------------------------------------------------------------------
-# INTERFACE 1: STEP 1 INTERVIEW GUIDE (FULL QUESTIONS)
+# INTERFACE 2: STEP 1 INTERVIEW GUIDE (FULL QUESTIONS)
 # ------------------------------------------------------------------------------
 with tab1:
-    st.markdown("### Interface 1: Step 1 Interview Guide — Defining Thesis Process")
+    st.markdown("### Interface 2: Step 1 Interview Guide — Defining Thesis Process")
     st.caption("Record full Step 1 interviews with faculty/advisors and standardize concrete thesis process stages.")
 
     col1, col2 = st.columns([1.1, 0.9])
@@ -667,10 +1019,10 @@ with tab1:
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 2: STEP 2 FACULTY OBSERVATIONS (FULL QUESTIONS)
+# INTERFACE 3: STEP 2 FACULTY OBSERVATIONS (FULL QUESTIONS)
 # ------------------------------------------------------------------------------
 with tab2:
-    st.markdown("### Interface 2: Step 2 Faculty Interview Guide — Observed Challenges")
+    st.markdown("### Interface 3: Step 2 Faculty Interview Guide — Observed Challenges")
     st.caption("Capture faculty advisor observations across all stages, hardest stage identification, tools, and referrals.")
     
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
@@ -772,16 +1124,16 @@ with tab2:
                     "d1": q_d1, "d2": q_d2, "d3": q_d3, "d4": q_d4, "d6": q_d6
                 }
                 upsert_interview(st.session_state.step2_interviews, entry)
-                st.toast(f"✅ Saved Faculty Interview {s2_id}! Ready for coding in Interface 4.", icon="💾")
+                st.toast(f"✅ Saved Faculty Interview {s2_id}! Ready for coding in Interface 5.", icon="💾")
                 st.rerun()
             st.error("Enter the faculty interviewee ID before saving the interview.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 3: STEP 3 STUDENT EXPERIENCES (FULL QUESTIONS)
+# INTERFACE 4: STEP 3 STUDENT EXPERIENCES (FULL QUESTIONS)
 # ------------------------------------------------------------------------------
 with tab3:
-    st.markdown("### Interface 3: Step 3 Student Interview Guide — Thesis Experience")
+    st.markdown("### Interface 4: Step 3 Student Interview Guide — Thesis Experience")
     st.caption("Capture complete Barrett student interview responses across warm-up, stage experience, ideas, challenges, tools, and support.")
     
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
@@ -904,10 +1256,10 @@ with tab3:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 4: QUALITATIVE CODING & ICR ENGINE
+# INTERFACE 5: QUALITATIVE CODING & ICR ENGINE
 # ------------------------------------------------------------------------------
 with tab4:
-    st.markdown("### Interface 4: Transcript Coding Repository & Reliability Engine")
+    st.markdown("### Interface 5: Transcript Coding Repository & Reliability Engine")
     
     sub_code, sub_annot, sub_icr = st.tabs(["📖 Living Codebook v0.3", "🏷️ Coding Interface (Coder A)", "🛡️ Coder B & Kappa Verification"])
 
@@ -1064,10 +1416,10 @@ with tab4:
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 5: SUBTAG DRILL-DOWN & FREQUENCY
+# INTERFACE 6: SUBTAG DRILL-DOWN & FREQUENCY
 # ------------------------------------------------------------------------------
 with tab5:
-    st.markdown("### Interface 5: Qualitative Frequencies & Subtag Filters")
+    st.markdown("### Interface 6: Qualitative Frequencies & Subtag Filters")
 
     frequency_tab, uncoded_tab = st.tabs(["Qualitative Frequencies", "Transcripts (Uncoded)"])
     with frequency_tab:
@@ -1159,10 +1511,10 @@ with tab5:
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 6: QUANTITATIVE SURVEY STATS
+# INTERFACE 7: QUANTITATIVE SURVEY STATS
 # ------------------------------------------------------------------------------
 with tab6:
-    st.markdown("### Interface 6: Quantitative Survey Entry & Statistical Tests")
+    st.markdown("### Interface 7: Quantitative Survey Entry & Statistical Tests")
     
     col1, col2 = st.columns([1, 1.5])
 
@@ -1246,10 +1598,10 @@ with tab6:
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
-# INTERFACE 7: 2x2 STRATEGY MATRIX
+# INTERFACE 8: 2x2 STRATEGY MATRIX
 # ------------------------------------------------------------------------------
 with tab7:
-    st.markdown("### Interface 7: Integrated 2x2 Opportunity Prioritization Engine")
+    st.markdown("### Interface 8: Integrated 2x2 Opportunity Prioritization Engine")
     
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     df_annot = pd.DataFrame(st.session_state.coder_a_annotations) if st.session_state.coder_a_annotations else pd.DataFrame()
@@ -1311,7 +1663,7 @@ with tab7:
             q_drop.append(item)
 
     if not matrix_data:
-        st.info("No codes to display yet. Apply at least one code in Interface 4 first.")
+        st.info("No codes to display yet. Apply at least one code in Interface 5 first.")
     else:
         def render_strategy_quadrant(key, title, description, entries):
             with st.container(border=True, key=key):
