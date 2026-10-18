@@ -269,19 +269,129 @@ def upsert_interview(interviews, entry):
     else:
         existing.update(entry)
 
-def format_interview_transcript(interview, base_fields):
-    sections = [" ".join(str(interview.get(field, "")).strip() for field in base_fields).strip()]
-    for stage_entry in interview.get("stage_responses", []):
-        answers = [
-            f"{question}: {answer}"
-            for question, answer in stage_entry.get("responses", {}).items()
-            if answer
+def build_transcript_questions(interview, source):
+    prompts = {
+        "Step 1": [
+            ("a1", "A1. From beginning to end, what are the main areas/phases a student goes through?"),
+            ("a2", "A2. What do you call each of these? Is there a name you/your department use?"),
+            ("a3", "A3. In what order do students usually move through them?"),
+            ("a4", "A4. Is there anything before the first or after the last area we should include?"),
+            ("a5", "A5. (Read list back) Does this match how you see the process? What would you change?"),
+            ("a6", "A6. Is this list the same for every thesis in your discipline or does it change?"),
+            ("b1", "B1. What is [STAGE]? How would you explain it to a new student?"),
+            ("b2", "B2. What does a student actually do during [STAGE]?"),
+            ("b3", "B3. What does a student have to complete, produce, or have approved?"),
+            ("b4", "B4. Which requirements are set officially (Barrett/college) vs advisor/discipline?"),
+            ("b5", "B5. How do you know when a student is ready to move on from [STAGE]?"),
+            ("b6", "B6. What does a student need to have in place before beginning [STAGE]?"),
+            ("b7", "B7. Who is involved in [STAGE], and what does each person do?"),
+            ("b8", "B8. How long does [STAGE] take, and where does it fall on the timeline?"),
+            ("b9", "B9. What changes about [STAGE] from one project/discipline to another?"),
+            ("c1", "C1. Are there areas that overlap or blur together? How do you tell where one ends?"),
+            ("c2", "C2. Are there areas that some students skip, combine, or repeat?"),
+            ("c3", "C3. Are there official milestones, forms, or deadlines every student must meet?"),
+            ("c4", "C4. Is there anything about how the thesis process works that we missed?"),
+            ("c5", "C5. Who else should we speak with?")
+        ],
+        "Step 2": [
+            ("a2", "A2. Is there anything about these stages or definitions that is unclear?"),
+            ("a3", "A3. Is there any stage you think of differently from how it is defined here?"),
+            ("c2", "C2. Why do you think students struggle the most at {stage}?"),
+            ("c3", "C3. What does that struggle look like when it is happening?"),
+            ("c4", "C4. Can you walk me through a specific example, without naming the student?"),
+            ("c5", "C5. What do you notice about students who get through with less struggle?"),
+            ("d1", "D1. How do you see students come up with their ideas and keep track of them?"),
+            ("d2", "D2. What tools, systems, or methods have you seen students use to track work?"),
+            ("d3", "D3. What have you noticed about how well those work for students?"),
+            ("d4", "D4. When a student is stuck, what do you suggest and where do you send them?"),
+            ("d6", "D6. Is there anything else about what students go through that we missed?")
+        ],
+        "Step 3": [
+            ("01", "01. In a sentence or two, what is your thesis about?"),
+            ("02", "02. About how long have you been working on your thesis?"),
+            ("03", "03. Is there anything on the stage card that is unclear?"),
+            ("04", "04. Which stages have you finished, and which one are you in now?"),
+            ("q_11", "11. Where did your thesis idea come from? Walk me through how you first came up with it."),
+            ("q_12", "12. Tell me about any other ideas you considered before your current one. What happened to them?"),
+            ("q_13", "13. Think about the most recent time a new thesis idea came to you. Where were you & doing?"),
+            ("q_14", "14. What was the first thing you did with that idea?"),
+            ("q_15", "15. What happened to that idea afterward?"),
+            ("q_16", "16. Last time you needed something saved earlier (note, source, idea), what happened?"),
+            ("q_17", "17. Walk me through the steps between that first idea and having a plan to work from."),
+            ("q_18", "18. Was there a point on the way from idea to plan where you were unsure what to do next?"),
+            ("q_19", "19. Walk me through how one part went from an idea to what you have now (deliverable)."),
+            ("q_110", "110 (Optional). Last idea that turned into something you had to do (task/deadline)?"),
+            ("h1", "H1. What has been the most difficult challenge you have faced with your thesis so far?"),
+            ("h3", "H3. What made that so difficult?"),
+            ("h4", "H4. What did that look like day to day? What were you doing, or not doing?"),
+            ("h5", "H5. How did you get through it, or are you still working through it? What helped?"),
+            ("u1", "U1. Last time you wrote down or recorded an idea for your thesis, what did you use?"),
+            ("u2", "U2. Where do your thesis notes, readings, and sources live right now? List every place."),
+            ("u3", "U3. How did you start using each tool/place? Who/what made you choose it?"),
+            ("u4", "U4. What works well about using it, and what is frustrating about it?"),
+            ("u5", "U5. Have you stopped using any app, notebook, or method you started out with? Why?"),
+            ("u6", "U6. What do you use to turn ideas into your final project (outline, draft, plan)?"),
+            ("u7", "U7. Is there anything you do by hand or work around because a tool doesn't do it?"),
+            ("u8", "U8. Thinking about the last time you did that workaround, what were you trying to get done?"),
+            ("u9", "U9 (Optional). Would you change anything about how you handle notes/ideas weekly?"),
+            ("s1", "S1. When in your thesis did you most wish you had more help? What kind of help?"),
+            ("s2", "S2. When you have had a question about your thesis, who did you go to?"),
+            ("s3", "S3. Where do you usually go to find out about resources/tools? Whose advice do you trust?"),
+            ("s4", "S4. Is there anything that made your thesis easier or harder that we haven't talked about?")
         ]
-        stage_text = f"Stage: {stage_entry['stage']}"
-        if answers:
-            stage_text += "\n" + "\n".join(answers)
-        sections.append(stage_text)
-    return "\n\n".join(section for section in sections if section)
+    }
+
+    questions = []
+    for field, prompt in prompts.get(source, []):
+        answer = str(interview.get(field, "")).strip()
+        if answer:
+            questions.append({"stage": interview.get("hardest_stage", ""), "question": prompt.format(stage=interview.get("hardest_stage", "the selected stage")), "answer": answer})
+
+    stage_questions = {
+        "Step 2": [
+            "B1. What struggles do you observe at {stage}?",
+            "B2. What does that look like in practice at {stage}? What do you see students doing or not doing?",
+            "B3. Can you describe a recent example of a struggle at {stage}, without naming the student?",
+            "B4. What do students do when this happens during {stage}?",
+            "B5. What do you think is going on when students struggle during {stage}?",
+            "B6. How common is this among the students you have advised during {stage}?",
+            "B7. What have you seen students do that helps them through {stage}?",
+            "B8. Does what you see at {stage} change with project type or discipline?"
+        ],
+        "Step 3": [
+            "B1. Walk me through what you did during {stage}, starting with the first thing.",
+            "B2. Think of a moment during {stage} when something didn't go as expected. What happened?",
+            "B3. What did you do when that happened during {stage}?",
+            "B4. What do you think was going on at that point in {stage}?",
+            "B5. What part of {stage} went more smoothly than expected? What helped?",
+            "B6. Was anyone else involved in {stage}? What did they do? (Optional)",
+            "B7. If doing {stage} again, what would you do differently? (Optional)"
+        ]
+    }
+    for stage_entry in interview.get("stage_responses", []):
+        stage = stage_entry.get("stage", "")
+        answers = stage_entry.get("responses", {})
+        for question_number, prompt in enumerate(stage_questions.get(source, []), 1):
+            answer = str(answers.get(f"B{question_number}", "")).strip()
+            if answer:
+                questions.append({
+                    "stage": stage,
+                    "question": prompt.format(stage=stage),
+                    "answer": answer
+                })
+
+    legacy_questions = stage_questions.get(source, [])
+    if legacy_questions and not interview.get("stage_responses"):
+        legacy_stage = interview.get("hardest_stage", "")
+        for question_number, prompt in enumerate(legacy_questions, 1):
+            answer = str(interview.get(f"b{question_number}", "")).strip()
+            if answer:
+                questions.append({
+                    "stage": legacy_stage,
+                    "question": prompt.format(stage=legacy_stage),
+                    "answer": answer
+                })
+    return questions
 
 @st.dialog("Stage saved to transcript")
 def ask_document_more_stages(state_key):
@@ -720,41 +830,84 @@ with tab4:
     with sub_annot:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         all_transcripts = (
-            [{"source": "Step 1", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": f"{x.get('a1','')} {x.get('b1','')} {x.get('b2','')} {x.get('c1','')}"} for x in st.session_state.step1_interviews] +
-            [{"source": "Step 2", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": format_interview_transcript(x, ["a2", "a3", "c2", "c3", "c4", "c5", "d1", "d2", "d3", "d4", "d6"])} for x in st.session_state.step2_interviews] +
-            [{"source": "Step 3", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": format_interview_transcript(x, ["01", "02", "03", "04", "q_11", "q_12", "q_13", "q_14", "q_15", "q_16", "q_17", "q_18", "q_19", "q_110", "h1", "h3", "h4", "h5", "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "s1", "s2", "s3", "s4"])} for x in st.session_state.step3_interviews]
+            [{"source": "Step 1", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 1")} for x in st.session_state.step1_interviews] +
+            [{"source": "Step 2", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 2")} for x in st.session_state.step2_interviews] +
+            [{"source": "Step 3", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "questions": build_transcript_questions(x, "Step 3")} for x in st.session_state.step3_interviews]
         )
 
         if not all_transcripts:
             st.warning("No interview transcripts logged yet. Enter interviews in Interfaces 1–3 first.")
         else:
-            selected_int = st.selectbox("Select Interview Transcript:", [x["id"] for x in all_transcripts])
-            curr_item = next(x for x in all_transcripts if x["id"] == selected_int)
-            
+            transcript_options = [
+                f"{item['source']} | {item['id']} | {index + 1}"
+                for index, item in enumerate(all_transcripts)
+            ]
+            selected_transcript = st.selectbox(
+                "Select Interview Transcript:",
+                transcript_options,
+                key="coder_a_selected_transcript"
+            )
+            transcript_index = transcript_options.index(selected_transcript)
+            curr_item = all_transcripts[transcript_index]
+
             st.markdown(f"**Group:** `{curr_item['group']}` | **Discipline:** `{curr_item['discipline']}`")
-            st.text_area("Full Consolidated Transcript Text", value=curr_item["text"], height=160, disabled=True)
 
-            with st.form("coding_tag_form", clear_on_submit=True):
-                col1, col2 = st.columns(2)
-                with col1:
-                    selected_text = st.text_input("Paste Excerpt / Thought Unit to Code:")
-                with col2:
-                    code_options = [f"{c['id']} - {c['name']}" for c in st.session_state.codebook]
-                    selected_code = st.selectbox("Apply Code:", code_options)
+            questions = curr_item["questions"]
+            if not questions:
+                st.info("This interview does not have any answered questions to code yet.")
+            else:
+                question_indices = st.session_state.setdefault("coding_question_indices", {})
+                question_index = min(question_indices.get(selected_transcript, 0), len(questions) - 1)
+                question = questions[question_index]
+                total_questions = len(questions)
+                st.markdown(
+                    f"**Question {question_index + 1} / {total_questions}** · "
+                    f"{question_index} completed · {total_questions - question_index - 1} remaining"
+                )
+                st.progress((question_index + 1) / total_questions)
 
-                if st.form_submit_button("Save Coding Tag", use_container_width=True):
-                    if selected_text and selected_code:
-                        code_id = selected_code.split(" - ")[0]
-                        tag_entry = {
-                            "interview_id": curr_item["id"],
-                            "selected_text": selected_text,
-                            "code_id": code_id,
-                            "group": curr_item["group"],
-                            "discipline": curr_item["discipline"]
-                        }
-                        st.session_state.coder_a_annotations.append(tag_entry)
-                        st.toast(f"✅ Tagged excerpt with {code_id}!", icon="🏷️")
-                        st.rerun()
+                question_col, coding_col = st.columns([1.5, 1])
+                with question_col:
+                    with st.container(border=True):
+                        st.caption(f"Stage: {question['stage'] or 'Not specified'}")
+                        st.markdown(f"### {question['question']}")
+                        st.markdown("**Response**")
+                        st.write(question["answer"])
+
+                    previous_col, next_col = st.columns(2)
+                    with previous_col:
+                        if st.button("← Previous", disabled=question_index == 0, use_container_width=True):
+                            question_indices[selected_transcript] = question_index - 1
+                            st.rerun()
+                    with next_col:
+                        if st.button("Next →", disabled=question_index >= total_questions - 1, use_container_width=True):
+                            question_indices[selected_transcript] = question_index + 1
+                            st.rerun()
+
+                with coding_col:
+                    with st.container(border=True):
+                        st.subheader("Apply Code")
+                        with st.form("coding_tag_form", clear_on_submit=True):
+                            selected_text = st.text_area(
+                                "Paste Excerpt / Thought Unit to Code:",
+                                height=180
+                            )
+                            code_options = [f"{c['id']} - {c['name']}" for c in st.session_state.codebook]
+                            selected_code = st.selectbox("Apply Code:", code_options)
+
+                            if st.form_submit_button("Save Code", type="primary", use_container_width=True):
+                                if selected_text and selected_code:
+                                    code_id = selected_code.split(" - ")[0]
+                                    tag_entry = {
+                                        "interview_id": curr_item["id"],
+                                        "selected_text": selected_text,
+                                        "code_id": code_id,
+                                        "group": curr_item["group"],
+                                        "discipline": curr_item["discipline"]
+                                    }
+                                    st.session_state.coder_a_annotations.append(tag_entry)
+                                    st.toast(f"✅ Tagged excerpt with {code_id}!", icon="🏷️")
+                                    st.rerun()
 
             st.markdown("---")
             st.subheader("Existing Annotations (Coder A)")
