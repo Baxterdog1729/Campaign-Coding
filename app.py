@@ -226,6 +226,7 @@ def import_all_data(uploaded_json):
             st.session_state.final_stages = list(data["stage_definitions"])
         for stage_number in range(1, 7):
             st.session_state.pop(f"final_stage_edit_{stage_number}", None)
+            st.session_state.pop(f"final_stage_definition_edit_{stage_number}", None)
         return True
     except Exception as e:
         st.error(f"Failed to parse JSON file: {e}")
@@ -347,14 +348,21 @@ with tab1:
 
         if st.session_state.edit_final_stages:
             with st.form("final_stage_names_form"):
-                proposed_stages = [
-                    st.text_input(
-                        f"Final Stage {stage_number}",
-                        value=stage_name,
-                        key=f"final_stage_edit_{stage_number}"
-                    )
-                    for stage_number, stage_name in enumerate(st.session_state.final_stages, 1)
-                ]
+                proposed_stages = []
+                proposed_definitions = []
+                for stage_number, stage_name in enumerate(st.session_state.final_stages, 1):
+                    with st.container(border=True):
+                        proposed_stages.append(st.text_input(
+                            f"Final Stage {stage_number}",
+                            value=stage_name,
+                            key=f"final_stage_edit_{stage_number}"
+                        ))
+                        proposed_definitions.append(st.text_area(
+                            "Definition",
+                            value=st.session_state.stage_definitions.get(stage_name, ""),
+                            placeholder=f"Define {stage_name}...",
+                            key=f"final_stage_definition_edit_{stage_number}"
+                        ))
                 save_stages = st.form_submit_button("Save Final Stage Names", use_container_width=True)
 
             if save_stages:
@@ -364,22 +372,29 @@ with tab1:
                 elif len(set(cleaned_stages)) != len(cleaned_stages):
                     st.error("Each final stage name must be unique.")
                 else:
-                    previous_definitions = st.session_state.stage_definitions
                     st.session_state.stage_definitions = {
-                        stage: previous_definitions.get(stage, "") for stage in cleaned_stages
+                        stage: definition.strip()
+                        for stage, definition in zip(cleaned_stages, proposed_definitions)
                     }
                     st.session_state.final_stages = cleaned_stages
                     st.session_state.edit_final_stages = False
-                    st.toast("✅ Final stage names saved across the interview guides!", icon="🔒")
+                    st.toast("✅ Final stage names and definitions saved!", icon="🔒")
                     st.rerun()
         else:
             for stage_number, stage_name in enumerate(st.session_state.final_stages, 1):
-                st.text_input(
-                    f"Final Stage {stage_number}",
-                    value=stage_name,
-                    disabled=True,
-                    key=f"final_stage_display_{stage_number}"
-                )
+                with st.container(border=True):
+                    st.text_input(
+                        f"Final Stage {stage_number}",
+                        value=stage_name,
+                        disabled=True,
+                        key=f"final_stage_display_{stage_number}"
+                    )
+                    st.text_area(
+                        "Definition",
+                        value=st.session_state.stage_definitions.get(stage_name, ""),
+                        disabled=True,
+                        key=f"final_stage_definition_display_{stage_number}"
+                    )
             if st.button("Edit Final Stage Names", use_container_width=True):
                 st.session_state.edit_final_stages = True
                 st.rerun()
