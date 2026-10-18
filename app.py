@@ -674,21 +674,36 @@ with tab6:
         st.subheader("Record Survey Response")
         with st.form("survey_form", clear_on_submit=True):
             s_id = st.text_input("Survey ID *", placeholder="e.g. R-001")
-            code_id = st.selectbox("Target Code *", [c["id"] for c in st.session_state.codebook])
-            eligible = st.checkbox("Eligible for Stage?", value=True)
-            experienced = st.checkbox("Experienced Difficulty?", value=True)
-            severity = st.slider("Pain Severity Rating (1-5)", 1, 5, 4)
-            tools = st.multiselect("Tools Referenced", ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"
-            ])
+            survey_codes = [f"C{code_number}" for code_number in range(1, 9)]
+            responses = []
+            for section_number in range(1, 6):
+                st.markdown(f"#### Section {section_number}")
+                code_id = st.selectbox(
+                    f"Target Code {section_number} *", survey_codes
+                )
+                eligible = st.checkbox(
+                    f"Eligible for Stage? (Section {section_number})", value=True
+                )
+                experienced = st.checkbox(
+                    f"Experienced Difficulty? (Section {section_number})", value=True
+                )
+                severity = st.slider(
+                    f"Pain Severity Rating (1-5) (Section {section_number})", 1, 5, 4
+                )
+                responses.append((code_id, eligible, experienced, severity))
 
             if st.form_submit_button("Record Response", use_container_width=True):
                 if s_id:
-                    entry = {
-                        "survey_id": s_id, "code_id": code_id, "eligible": eligible,
-                        "experienced": experienced, "severity": severity, "tools_referenced": tools
-                    }
-                    st.session_state.surveys.append(entry)
-                    st.toast(f"✅ Saved Survey Response {s_id}!", icon="📊")
+                    for section_number, (code_id, eligible, experienced, severity) in enumerate(responses, 1):
+                        st.session_state.surveys.append({
+                            "survey_id": s_id,
+                            "section": section_number,
+                            "code_id": code_id,
+                            "eligible": eligible,
+                            "experienced": experienced,
+                            "severity": severity
+                        })
+                    st.toast(f"✅ Saved 5 survey responses for {s_id}!", icon="📊")
                     st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
