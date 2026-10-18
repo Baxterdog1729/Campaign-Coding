@@ -573,6 +573,16 @@ with tab3:
     with discipline_col:
         s3_discipline = st.selectbox("Discipline *", ["STEM", "Creative", "Humanities", "Social Science"], key="step3_discipline")
 
+    warmup_key = f"step3:{s3_id.strip() or 'new-interview'}:warmup"
+    stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
+    hardest_stage = st.selectbox("Hardest Stage (H2)", stages_list, key=f"{warmup_key}:hardest-stage")
+
+    st.markdown("#### Warm-Up & Stage Status (01 – 04)")
+    q_01 = st.text_area("01. In a sentence or two, what is your thesis about?", height=60, key=f"{warmup_key}:01")
+    q_02 = st.text_area("02. About how long have you been working on your thesis?", height=60, key=f"{warmup_key}:02")
+    q_03 = st.text_area("03. Is there anything on the stage card that is unclear?", height=60, key=f"{warmup_key}:03")
+    q_04 = st.text_area("04. Which stages have you finished, and which one are you in now?", height=60, key=f"{warmup_key}:04")
+
     stage_options = st.session_state.final_stages or ["Topic Selection / Ideation"]
     stage_state_key = f"step3:{s3_id.strip() or 'new-interview'}"
     walk_state = st.session_state.stage_walkthrough_ui.setdefault(
@@ -622,15 +632,6 @@ with tab3:
             ask_document_more_stages(stage_state_key)
 
     with st.form("step3_full_form", clear_on_submit=True):
-        stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
-        hardest_stage = st.selectbox("Hardest Stage (H2)", stages_list)
-
-        st.markdown("#### Warm-Up & Stage Status (01 – 04)")
-        q_01 = st.text_area("01. In a sentence or two, what is your thesis about?", height=60)
-        q_02 = st.text_area("02. About how long have you been working on your thesis?", height=60)
-        q_03 = st.text_area("03. Is there anything on the stage card that is unclear?", height=60)
-        q_04 = st.text_area("04. Which stages have you finished, and which one are you in now?", height=60)
-
         st.markdown("#### Your Ideas (11 – 110)")
         q_11 = st.text_area("11. Where did your thesis idea come from? Walk me through how you first came up with it.", height=70)
         q_12 = st.text_area("12. Tell me about any other ideas you considered before your current one. What happened to them?", height=70)
