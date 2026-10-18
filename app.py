@@ -678,7 +678,8 @@ with tab6:
             eligible = st.checkbox("Eligible for Stage?", value=True)
             experienced = st.checkbox("Experienced Difficulty?", value=True)
             severity = st.slider("Pain Severity Rating (1-5)", 1, 5, 4)
-            tools = st.multiselect("Tools Referenced", ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"])
+            tools = st.multiselect("Tools Referenced", ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"
+            ])
 
             if st.form_submit_button("Record Response", use_container_width=True):
                 if s_id:
