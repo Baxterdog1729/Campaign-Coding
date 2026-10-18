@@ -188,6 +188,7 @@ def init_session_state():
         "stage_definitions": {},
         "final_stages": default_stages,
         "edit_final_stages": False,
+        "stage_walkthrough_ui": {},
         "codebook": get_full_codebook_v03(),
         "coder_a_annotations": [],
         "coder_b_annotations": [],
@@ -237,6 +238,64 @@ def clear_all_data():
         del st.session_state[key]
     init_session_state()
     st.rerun()
+
+def save_stage_response(interviews, interview_id, group, discipline, stage, responses):
+    interview_id = interview_id.strip()
+    interview = next((item for item in interviews if item["id"] == interview_id), None)
+    if interview is None:
+        interview = {
+            "id": interview_id,
+            "group": group,
+            "discipline": discipline,
+            "stage_responses": []
+        }
+        interviews.append(interview)
+    else:
+        interview["group"] = group
+        interview["discipline"] = discipline
+
+    stage_responses = interview.setdefault("stage_responses", [])
+    saved_stage = {"stage": stage, "responses": responses}
+    existing = next((item for item in stage_responses if item["stage"] == stage), None)
+    if existing is None:
+        stage_responses.append(saved_stage)
+    else:
+        existing.update(saved_stage)
+
+def upsert_interview(interviews, entry):
+    existing = next((item for item in interviews if item["id"] == entry["id"]), None)
+    if existing is None:
+        interviews.append(entry)
+    else:
+        existing.update(entry)
+
+def format_interview_transcript(interview, base_fields):
+    sections = [" ".join(str(interview.get(field, "")).strip() for field in base_fields).strip()]
+    for stage_entry in interview.get("stage_responses", []):
+        answers = [
+            f"{question}: {answer}"
+            for question, answer in stage_entry.get("responses", {}).items()
+            if answer
+        ]
+        stage_text = f"Stage: {stage_entry['stage']}"
+        if answers:
+            stage_text += "\n" + "\n".join(answers)
+        sections.append(stage_text)
+    return "\n\n".join(section for section in sections if section)
+
+@st.dialog("Stage saved to transcript")
+def ask_document_more_stages(state_key):
+    st.write("Document more stages?")
+    more_col, finished_col = st.columns(2)
+    with more_col:
+        if st.button("Document more stages", key=f"{state_key}:more"):
+            st.session_state.stage_walkthrough_ui[state_key]["pending"] = False
+            st.rerun()
+    with finished_col:
+        if st.button("Finished.", key=f"{state_key}:finished"):
+            st.session_state.stage_walkthrough_ui[state_key]["pending"] = False
+            st.session_state.stage_walkthrough_ui[state_key]["finished"] = True
+            st.rerun()
 
 # ==============================================================================
 # HEADER & GLOBAL DATA CONTROL DRAWER
@@ -408,39 +467,75 @@ with tab2:
     st.caption("Capture faculty advisor observations across all stages, hardest stage identification, tools, and referrals.")
     
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+    id_col, discipline_col = st.columns(2)
+    with id_col:
+        s2_id = st.text_input("Faculty Interviewee ID *", placeholder="e.g. F-01", key="step2_interview_id")
+    with discipline_col:
+        s2_discipline = st.selectbox("Faculty Discipline *", ["STEM", "Creative", "Humanities", "Social Science"], key="step2_discipline")
+
+    stage_options = st.session_state.final_stages or ["Topic Selection / Ideation"]
+    stage_state_key = f"step2:{s2_id.strip() or 'new-interview'}"
+    walk_state = st.session_state.stage_walkthrough_ui.setdefault(
+        stage_state_key, {"version": 0, "pending": False, "finished": False}
+    )
+    st.markdown("#### Part B: Observed Struggles by Stage")
+    if walk_state["finished"]:
+        st.success("Stage walkthrough finished. Saved stage responses are in the transcript.")
+    else:
+        walk_stage = st.selectbox("Select Stage", stage_options, key=f"{stage_state_key}:stage-select")
+        widget_prefix = f"{stage_state_key}:v{walk_state['version']}:{walk_stage}"
+        with st.form(f"{stage_state_key}:stage-form", clear_on_submit=True):
+            stage_answers = {
+                f"B{question_number}": st.text_area(
+                    prompt.format(stage=walk_stage),
+                    height=70,
+                    key=f"{widget_prefix}:B{question_number}"
+                )
+                for question_number, prompt in [
+                    (1, "What struggles do you observe at {stage}?"),
+                    (2, "What does that look like in practice at {stage}? What do you see students doing or not doing?"),
+                    (3, "Can you describe a recent example of a struggle at {stage}, without naming the student?"),
+                    (4, "What do students do when this happens during {stage}?"),
+                    (5, "What do you think is going on when students struggle during {stage}?"),
+                    (6, "How common is this among the students you have advised during {stage}?"),
+                    (7, "What have you seen students do that helps them through {stage}?"),
+                    (8, "Does what you see at {stage} change with project type or discipline?")
+                ]
+            }
+            save_stage = st.form_submit_button(f"Save {walk_stage} to Transcript", use_container_width=True)
+
+        if save_stage:
+            if not s2_id.strip():
+                st.error("Enter the faculty interviewee ID before saving stage responses.")
+            else:
+                save_stage_response(
+                    st.session_state.step2_interviews,
+                    s2_id,
+                    "Faculty",
+                    s2_discipline,
+                    walk_stage,
+                    stage_answers
+                )
+                walk_state["version"] += 1
+                walk_state["pending"] = True
+                st.session_state.stage_walkthrough_ui[stage_state_key] = walk_state
+        if walk_state["pending"]:
+            ask_document_more_stages(stage_state_key)
+
     with st.form("step2_full_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            s2_id = st.text_input("Faculty Interviewee ID *", placeholder="e.g. F-01")
-            disc = st.selectbox("Faculty Discipline *", ["STEM", "Creative", "Humanities", "Social Science"])
-        with col2:
-            stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
-            hardest_stage = st.selectbox("Stage with Greatest Struggle (C1) *", stages_list)
-        
-        st.markdown("---")
+        stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
+        hardest_stage = st.selectbox("Stage with Greatest Struggle (C1) *", stages_list)
+
         st.markdown("#### Part A: Confirming Stages")
         q_a2 = st.text_area("A2. Is there anything about these stages or definitions that is unclear?", height=60)
         q_a3 = st.text_area("A3. Is there any stage you think of differently from how it is defined here?", height=60)
 
-        st.markdown("---")
-        st.markdown("#### Part B: Observed Struggles in Each Stage (B1 – B8)")
-        q_b1 = st.text_area(f"B1. What struggles do you observe at {hardest_stage}?", height=70)
-        q_b2 = st.text_area("B2. What does that look like in practice? What do you see students doing/not doing?", height=70)
-        q_b3 = st.text_area("B3. Can you describe a recent example, without naming the student?", height=70)
-        q_b4 = st.text_area("B4. What do you see students do when this happens?", height=70)
-        q_b5 = st.text_area("B5. What do you think is going on when students struggle in this way?", height=70)
-        q_b6 = st.text_area("B6. How common is this among the students you have advised?", height=70)
-        q_b7 = st.text_area(f"B7. What have you seen students do that helps them through {hardest_stage}?", height=70)
-        q_b8 = st.text_area(f"B8. Does what you see at {hardest_stage} change with project type/discipline?", height=70)
-
-        st.markdown("---")
         st.markdown("#### Part C: Stage with Greatest Struggle (C1 – C5)")
         q_c2 = st.text_area(f"C2. Why do you think students struggle the most at {hardest_stage}?", height=70)
         q_c3 = st.text_area("C3. What does that struggle look like when it is happening?", height=70)
         q_c4 = st.text_area("C4. Can you walk me through a specific example, without naming the student?", height=70)
         q_c5 = st.text_area("C5. What do you notice about students who get through with less struggle?", height=70)
 
-        st.markdown("---")
         st.markdown("#### Part D: Ideas, Tools, and Support (D1 – D6)")
         q_d1 = st.text_area("D1. How do you see students come up with their ideas and keep track of them?", height=70)
         q_d2 = st.text_area("D2. What tools, systems, or methods have you seen students use to track work?", height=70)
@@ -449,15 +544,17 @@ with tab2:
         q_d6 = st.text_area("D6. Is there anything else about what students go through that we missed?", height=70)
 
         if st.form_submit_button("Save Complete Faculty Interview", use_container_width=True):
-            if s2_id:
+            if s2_id.strip():
                 entry = {
-                    "id": s2_id, "group": "Faculty", "discipline": disc, "hardest_stage": hardest_stage,
-                    "a2": q_a2, "a3": q_a3, "b1": q_b1, "b2": q_b2, "b3": q_b3, "b4": q_b4, "b5": q_b5, "b6": q_b6, "b7": q_b7, "b8": q_b8,
-                    "c2": q_c2, "c3": q_c3, "c4": q_c4, "c5": q_c5, "d1": q_d1, "d2": q_d2, "d3": q_d3, "d4": q_d4, "d6": q_d6
+                    "id": s2_id.strip(), "group": "Faculty", "discipline": s2_discipline, "hardest_stage": hardest_stage,
+                    "a2": q_a2, "a3": q_a3,
+                    "c2": q_c2, "c3": q_c3, "c4": q_c4, "c5": q_c5,
+                    "d1": q_d1, "d2": q_d2, "d3": q_d3, "d4": q_d4, "d6": q_d6
                 }
-                st.session_state.step2_interviews.append(entry)
+                upsert_interview(st.session_state.step2_interviews, entry)
                 st.toast(f"✅ Saved Faculty Interview {s2_id}! Ready for coding in Interface 4.", icon="💾")
                 st.rerun()
+            st.error("Enter the faculty interviewee ID before saving the interview.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
@@ -468,36 +565,72 @@ with tab3:
     st.caption("Capture complete Barrett student interview responses across warm-up, stage experience, ideas, challenges, tools, and support.")
     
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    with st.form("step3_full_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            s3_id = st.text_input("Student Participant ID *", placeholder="e.g. S-01")
-        with col2:
-            group = st.selectbox("Student Status *", ["Student-In-process", "Student-Completed", "Student-Beginning"])
-        with col3:
-            disc = st.selectbox("Discipline *", ["STEM", "Creative", "Humanities", "Social Science"])
+    id_col, group_col, discipline_col = st.columns(3)
+    with id_col:
+        s3_id = st.text_input("Student Participant ID *", placeholder="e.g. S-01", key="step3_interview_id")
+    with group_col:
+        s3_group = st.selectbox("Student Status *", ["Student-In-process", "Student-Completed", "Student-Beginning"], key="step3_group")
+    with discipline_col:
+        s3_discipline = st.selectbox("Discipline *", ["STEM", "Creative", "Humanities", "Social Science"], key="step3_discipline")
 
+    stage_options = st.session_state.final_stages or ["Topic Selection / Ideation"]
+    stage_state_key = f"step3:{s3_id.strip() or 'new-interview'}"
+    walk_state = st.session_state.stage_walkthrough_ui.setdefault(
+        stage_state_key, {"version": 0, "pending": False, "finished": False}
+    )
+    st.markdown("#### Stage by Stage Experience (B1 – B7)")
+    if walk_state["finished"]:
+        st.success("Stage walkthrough finished. Saved stage responses are in the transcript.")
+    else:
+        walk_stage = st.selectbox("Select Stage", stage_options, key=f"{stage_state_key}:stage-select")
+        widget_prefix = f"{stage_state_key}:v{walk_state['version']}:{walk_stage}"
+        with st.form(f"{stage_state_key}:stage-form", clear_on_submit=True):
+            stage_answers = {
+                f"B{question_number}": st.text_area(
+                    prompt.format(stage=walk_stage),
+                    height=height,
+                    key=f"{widget_prefix}:B{question_number}"
+                )
+                for question_number, prompt, height in [
+                    (1, "Walk me through what you did during {stage}, starting with the first thing.", 70),
+                    (2, "Think of a moment during {stage} when something didn't go as expected. What happened?", 70),
+                    (3, "What did you do when that happened during {stage}?", 70),
+                    (4, "What do you think was going on at that point in {stage}?", 70),
+                    (5, "What part of {stage} went more smoothly than expected? What helped?", 70),
+                    (6, "Was anyone else involved in {stage}? What did they do? (Optional)", 60),
+                    (7, "If doing {stage} again, what would you do differently? (Optional)", 60)
+                ]
+            }
+            save_stage = st.form_submit_button(f"Save {walk_stage} to Transcript", use_container_width=True)
+
+        if save_stage:
+            if not s3_id.strip():
+                st.error("Enter the student participant ID before saving stage responses.")
+            else:
+                save_stage_response(
+                    st.session_state.step3_interviews,
+                    s3_id,
+                    s3_group,
+                    s3_discipline,
+                    walk_stage,
+                    stage_answers
+                )
+                walk_state["version"] += 1
+                walk_state["pending"] = True
+                st.session_state.stage_walkthrough_ui[stage_state_key] = walk_state
+        if walk_state["pending"]:
+            ask_document_more_stages(stage_state_key)
+
+    with st.form("step3_full_form", clear_on_submit=True):
         stages_list = st.session_state.final_stages or ["Topic Selection / Ideation"]
         hardest_stage = st.selectbox("Hardest Stage (H2)", stages_list)
-        
-        st.markdown("---")
+
         st.markdown("#### Warm-Up & Stage Status (01 – 04)")
         q_01 = st.text_area("01. In a sentence or two, what is your thesis about?", height=60)
         q_02 = st.text_area("02. About how long have you been working on your thesis?", height=60)
         q_03 = st.text_area("03. Is there anything on the stage card that is unclear?", height=60)
         q_04 = st.text_area("04. Which stages have you finished, and which one are you in now?", height=60)
 
-        st.markdown("---")
-        st.markdown("#### Stage by Stage Experience (B1 – B7)")
-        q_b1 = st.text_area(f"B1. Walk me through what you did during {hardest_stage}, starting with the first thing.", height=70)
-        q_b2 = st.text_area(f"B2. Think of a moment during {hardest_stage} when something didn't go as expected. What happened?", height=70)
-        q_b3 = st.text_area("B3. What did you do when that happened?", height=70)
-        q_b4 = st.text_area("B4. What do you think was going on at that point?", height=70)
-        q_b5 = st.text_area(f"B5. What part of {hardest_stage} went more smoothly than expected? What helped?", height=70)
-        q_b6 = st.text_area(f"B6 (Optional). Was anyone else involved in {hardest_stage}? What did they do?", height=60)
-        q_b7 = st.text_area(f"B7 (Optional). If doing {hardest_stage} again, what would you do differently?", height=60)
-
-        st.markdown("---")
         st.markdown("#### Your Ideas (11 – 110)")
         q_11 = st.text_area("11. Where did your thesis idea come from? Walk me through how you first came up with it.", height=70)
         q_12 = st.text_area("12. Tell me about any other ideas you considered before your current one. What happened to them?", height=70)
@@ -510,14 +643,12 @@ with tab3:
         q_19 = st.text_area("19. Walk me through how one part went from an idea to what you have now (deliverable).", height=70)
         q_110 = st.text_area("110 (Optional). Last idea that turned into something you had to do (task/deadline)?", height=60)
 
-        st.markdown("---")
         st.markdown("#### Most Difficult Challenge (H1 – H5)")
         q_h1 = st.text_area("H1. What has been the most difficult challenge you have faced with your thesis so far?", height=70)
         q_h3 = st.text_area("H3. What made that so difficult?", height=70)
         q_h4 = st.text_area("H4. What did that look like day to day? What were you doing, or not doing?", height=70)
         q_h5 = st.text_area("H5. How did you get through it, or are you still working through it? What helped?", height=70)
 
-        st.markdown("---")
         st.markdown("#### Tools (U1 – U9)")
         q_u1 = st.text_area("U1. Last time you wrote down or recorded an idea for your thesis, what did you use?", height=60)
         q_u2 = st.text_area("U2. Where do your thesis notes, readings, and sources live right now? List every place.", height=70)
@@ -529,7 +660,6 @@ with tab3:
         q_u8 = st.text_area("U8. Thinking about the last time you did that workaround, what were you trying to get done?", height=60)
         q_u9 = st.text_area("U9 (Optional). Would you change anything about how you handle notes/ideas weekly?", height=60)
 
-        st.markdown("---")
         st.markdown("#### Support and Wrap-Up (S1 – S4)")
         q_s1 = st.text_area("S1. When in your thesis did you most wish you had more help? What kind of help?", height=70)
         q_s2 = st.text_area("S2. When you have had a question about your thesis, who did you go to?", height=60)
@@ -537,19 +667,19 @@ with tab3:
         q_s4 = st.text_area("S4. Is there anything that made your thesis easier or harder that we haven't talked about?", height=70)
 
         if st.form_submit_button("Save Complete Student Interview", use_container_width=True):
-            if s3_id:
+            if s3_id.strip():
                 entry = {
-                    "id": s3_id, "group": group, "discipline": disc, "hardest_stage": hardest_stage,
+                    "id": s3_id.strip(), "group": s3_group, "discipline": s3_discipline, "hardest_stage": hardest_stage,
                     "01": q_01, "02": q_02, "03": q_03, "04": q_04,
-                    "b1": q_b1, "b2": q_b2, "b3": q_b3, "b4": q_b4, "b5": q_b5, "b6": q_b6, "b7": q_b7,
                     "q_11": q_11, "q_12": q_12, "q_13": q_13, "q_14": q_14, "q_15": q_15, "q_16": q_16, "q_17": q_17, "q_18": q_18, "q_19": q_19, "q_110": q_110,
                     "h1": q_h1, "h3": q_h3, "h4": q_h4, "h5": q_h5,
                     "u1": q_u1, "u2": q_u2, "u3": q_u3, "u4": q_u4, "u5": q_u5, "u6": q_u6, "u7": q_u7, "u8": q_u8, "u9": q_u9,
                     "s1": q_s1, "s2": q_s2, "s3": q_s3, "s4": q_s4
                 }
-                st.session_state.step3_interviews.append(entry)
+                upsert_interview(st.session_state.step3_interviews, entry)
                 st.toast(f"✅ Saved Student Interview {s3_id}! Ready for qualitative coding.", icon="💾")
                 st.rerun()
+            st.error("Enter the student participant ID before saving the interview.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
@@ -590,8 +720,8 @@ with tab4:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         all_transcripts = (
             [{"source": "Step 1", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": f"{x.get('a1','')} {x.get('b1','')} {x.get('b2','')} {x.get('c1','')}"} for x in st.session_state.step1_interviews] +
-            [{"source": "Step 2", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": f"{x.get('b1','')} {x.get('b3','')} {x.get('c2','')} {x.get('d1','')}"} for x in st.session_state.step2_interviews] +
-            [{"source": "Step 3", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": f"{x.get('q_11','')} {x.get('q_13','')} {x.get('h1','')} {x.get('u1','')}"} for x in st.session_state.step3_interviews]
+            [{"source": "Step 2", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": format_interview_transcript(x, ["a2", "a3", "c2", "c3", "c4", "c5", "d1", "d2", "d3", "d4", "d6"])} for x in st.session_state.step2_interviews] +
+            [{"source": "Step 3", "id": x["id"], "group": x["group"], "discipline": x["discipline"], "text": format_interview_transcript(x, ["01", "02", "03", "04", "q_11", "q_12", "q_13", "q_14", "q_15", "q_16", "q_17", "q_18", "q_19", "q_110", "h1", "h3", "h4", "h5", "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8", "u9", "s1", "s2", "s3", "s4"])} for x in st.session_state.step3_interviews]
         )
 
         if not all_transcripts:
